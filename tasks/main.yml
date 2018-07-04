@@ -1,0 +1,80 @@
+---
+- import_tasks: setup-RedHat.yml
+  when: ansible_os_family == 'RedHat'
+  tags: nodejs
+
+- import_tasks: setup-Debian.yml
+  when: ansible_os_family == 'Debian'
+  tags: nodejs
+
+- name: Define nodejs_install_npm_user (if not set)
+  set_fact:
+    nodejs_install_npm_user: "{{ ansible_user | default(lookup('env', 'USER')) }}"
+  when: nodejs_install_npm_user|length == 0
+  tags: nodejs
+
+- name: Get nodejs_install_npm_user group
+  shell: >
+    id -gn "{{ nodejs_install_npm_user }}"
+  register: nodejs_install_npm_group
+  tags: nodejs
+
+- name: Get nodejs_install_npm_user home dir
+  shell: >
+    getent passwd "{{ nodejs_install_npm_user }}" | cut -d: -f6
+  register: nodejs_install_npm_user_home_dir
+  tags: nodejs
+
+- name: Define npm_config_prefix (if not set)
+  set_fact:
+    npm_config_prefix: "{{ nodejs_install_npm_user_home_dir.stdout ~ '/.npm-global-modules' }}"
+  when: npm_config_prefix|length == 0
+  tags: nodejs
+
+- name: Create npm global module directory
+  file:
+    path: "{{ npm_config_prefix }}"
+    owner: "{{ nodejs_install_npm_user }}"
+    group: "{{ nodejs_install_npm_group.stdout }}"
+    state: directory
+    mode: 0755
+  tags: nodejs
+
+- block:
+  - name: Add npm_config_prefix bin directory to nodejs_install_npm_user $PATH.
+    lineinfile:
+      path: "{{ nodejs_install_npm_user_home_dir.stdout }}/.profile"
+      line: 'export PATH="$PATH:{{ npm_config_prefix }}/bin"'
+      state: present
+
+  - name: Export NPM_CONFIG_PREFIX for nodejs_install_npm_user
+    lineinfile:
+      path: "{{ nodejs_install_npm_user_home_dir.stdout }}/.profile"
+      line: 'export NPM_CONFIG_PREFIX={{ npm_config_prefix }}'
+      state: present
+
+  - name: Export NODE_PATH var nodejs_install_npm_user
+    lineinfile:
+      path: "{{ nodejs_install_npm_user_home_dir.stdout }}/.profile"
+      line: 'export NODE_PATH=$NODE_PATH:{{ npm_config_prefix }}/lib/node_modules'
+      state: present
+  tags: nodejs
+
+- name: Ensure npm global packages are installed
+  npm:
+    name: "{{ item.name | default(item) }}"
+    version: "{{ item.version | default('latest') }}"
+    global: yes
+    state: latest
+  environment:
+    NPM_CONFIG_PREFIX: "{{ npm_config_prefix }}"
+    NODE_PATH: "{{ npm_config_prefix }}/lib/node_modules"
+    NPM_CONFIG_UNSAFE_PERM: "{{ npm_config_unsafe_perm }}"
+  with_items: "{{ nodejs_npm_global_packages }}"
+  tags: nodejs
+
+- name: Install packages defined in a given package.json
+  npm:
+    path: "{{ nodejs_package_json_path }}"
+  when: nodejs_package_json_path is defined and nodejs_package_json_path
+  tags: nodejs
